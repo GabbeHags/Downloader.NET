@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Xunit.Abstractions;
 
 namespace DownloaderNET.Tests;
 
@@ -13,6 +14,12 @@ public class BaseTest
 {
     private String? _root;
     private Int32 _randomPort;
+    private readonly ITestOutputHelper output;
+
+    public BaseTest(ITestOutputHelper output)
+    {
+        this.output = output;
+    }
 
     private void StartServer(Options options)
     {
@@ -21,7 +28,7 @@ public class BaseTest
         var builder = WebApplication.CreateBuilder();
 
         var app = builder.Build();
-        
+
         _root = Path.Combine(app.Environment.ContentRootPath, "test");
 
         if (!Directory.Exists(_root))
@@ -37,7 +44,7 @@ public class BaseTest
 
         app.UseEndpoints(endpoints =>
         {
-            endpoints.MapMethods("/", new[] { "GET", "HEAD" }, 
+            endpoints.MapMethods("/", new[] { "GET", "HEAD" },
                              async context =>
                              {
                                  Int32? rangeFrom = null;
@@ -59,8 +66,8 @@ public class BaseTest
                                  else
                                  {
                                      var ct = context.Request.GetTypedHeaders();
-                                     rangeFrom = (Int32?) ct.Range!.Ranges.First().From;
-                                     rangeTo = (Int32?) ct.Range!.Ranges.First().To;
+                                     rangeFrom = (Int32?)ct.Range!.Ranges.First().From;
+                                     rangeTo = (Int32?)ct.Range!.Ranges.First().To;
 
                                      key = $"{rangeFrom}-{rangeTo}";
 
@@ -71,7 +78,7 @@ public class BaseTest
                                  {
                                      await Task.Delay(options.ServerRequestTimeout);
                                  }
-                                 
+
                                  var file = await File.ReadAllBytesAsync(Path.Combine(_root, "test.bin"));
 
                                  if (rangeFrom.HasValue && rangeTo.HasValue)
@@ -89,7 +96,7 @@ public class BaseTest
                                                                          var buffer = new Byte[4096];
                                                                          Int32 bytesRead;
                                                                          Int64 totalBytesRead = rangeFrom ?? 0;
-                                                                         
+
                                                                          while ((bytesRead = await fileStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
                                                                          {
                                                                              totalBytesRead += bytesRead;
@@ -124,7 +131,7 @@ public class BaseTest
                                  });
                              });
         });
-        
+
         Task.Run(() =>
         {
             app.Logger.Log(LogLevel.Information, "Starting server");
@@ -140,15 +147,42 @@ public class BaseTest
 
         var tcs = new TaskCompletionSource<Boolean>();
         Exception? exception = null;
+        var chunkSize = options.ChunkSize;
+
+        if (chunkSize == 0)
+        {
+            chunkSize = (Int32)Math.Ceiling(328894.0 / options.Parallel);
+        }
 
         var downloader = new Downloader($"http://localhost:{_randomPort}/", fn, new Settings
         {
             RetryCount = options.DownloaderRetryCount,
             Parallel = options.Parallel,
             Timeout = options.DownloaderTimeout,
-            ChunkSize = (Int32) Math.Ceiling(328894.0 / options.Parallel)
+            ChunkSize = chunkSize,
+            MaximumBytesPerSecond = options.MaximumBytesPerSecond
         });
-        
+
+        var last = -1;
+        downloader.OnProgress += (chunks, fileQueue) =>
+        {
+            var p = (Int32)Math.Round(chunks.Sum(m => m.Progress) / chunks.Count);
+
+            if (p == last)
+            {
+                return;
+            }
+
+            last = p;
+
+            output.WriteLine($"Chunks count: {chunks.Count}");
+            output.WriteLine($"Active Chunks count: {chunks.Where(m => m.IsActive).Count()}");
+            var a = String.Join(", ", chunks.Where(m => m.IsActive).Select(m => m.Speed.ToMemoryMensurableUnit()));
+            output.WriteLine($"All active chunks [{a}]");
+            output.WriteLine($"Avg {chunks.Where(m => m.IsActive).Sum(m => m.Speed).ToMemoryMensurableUnit()}/s ({p}%)");
+            output.WriteLine($"FileQueue length: {fileQueue}");
+        };
+
         downloader.OnComplete += (_, ex) =>
         {
             exception = ex;
@@ -221,12 +255,15 @@ public class BaseTest
 public class Options
 {
     public Int32 Parallel { get; init; } = 1;
+    public Int32 MaximumBytesPerSecond { get; init; }
 
     public Int32 DownloaderRetryCount { get; init; }
 
     public Int32 DownloaderTimeout { get; init; } = 5000;
 
     public Int32 ServerSize { get; init; } = 10000;
+
+    public Int32 ChunkSize { get; init; }
 
     public Int32 ServerFailAfterBytes { get; init; }
 

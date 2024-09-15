@@ -2,11 +2,18 @@
 
 internal class Bandwidth
 {
-    public Double Speed { get; private set; }
-
+    private Double _speed = 0;
+    public Double Speed
+    {
+        get => _speed;
+        set
+        {
+            Interlocked.Exchange(ref _speed, value);
+        }
+    }
     private const Double OneSecond = 1000;
 
-    private readonly Int64 _bandwidthLimit;
+    private Int64 _bandwidthLimit;
 
     private Int32 _lastSecondCheckpoint;
     private Int64 _lastTransferredBytesCount;
@@ -19,11 +26,16 @@ internal class Bandwidth
         SecondCheckpoint();
     }
 
+    public void SetBandwidthLimit(Int32 newBandwidthLimit)
+    {
+        Interlocked.Exchange(ref _bandwidthLimit, newBandwidthLimit > 0 ? newBandwidthLimit : Int64.MaxValue);
+    }
+
     public void CalculateSpeed(Int64 receivedBytesCount)
     {
         var elapsedTime = Environment.TickCount - _lastSecondCheckpoint + 1;
         receivedBytesCount = Interlocked.Add(ref _lastTransferredBytesCount, receivedBytesCount);
-        var momentSpeed = receivedBytesCount * OneSecond / elapsedTime; 
+        var momentSpeed = receivedBytesCount * OneSecond / elapsedTime;
 
         if (OneSecond < elapsedTime)
         {
@@ -42,7 +54,7 @@ internal class Bandwidth
     {
         return Interlocked.Exchange(ref _speedRetrieveTime, 0);
     }
-    
+
     private void SecondCheckpoint()
     {
         Interlocked.Exchange(ref _lastSecondCheckpoint, Environment.TickCount);

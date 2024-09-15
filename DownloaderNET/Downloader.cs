@@ -36,6 +36,8 @@ public class Downloader : IDisposable
     
     private DateTimeOffset _lastGc = DateTimeOffset.UtcNow;
 
+    private Bandwidth _bandwidth;
+
     /// <summary>
     /// Construct the Downloader.
     /// </summary>
@@ -120,7 +122,10 @@ public class Downloader : IDisposable
             MaxConnectionsPerServer = _settings.Parallel * 2
         });
         _httpClient.Timeout = TimeSpan.FromMilliseconds(Math.Max(30000, settings.Timeout));
-        
+
+        Log($"Creating bandwith limit", -1);
+        _bandwidth = new Bandwidth(_settings.MaximumBytesPerSecond);
+
         Log($"Constructor done", -1);
     }
 
@@ -198,7 +203,7 @@ public class Downloader : IDisposable
         Log($"Chunks: {chunks.Count}", -1);
 
         _settings.Parallel = Math.Min(_settings.Parallel, chunks.Count);
-
+        _bandwidth.SetBandwidthLimit(_settings.MaximumBytesPerSecond / Math.Max(_settings.Parallel, 1));
         var completed = false;
         Exception? exception = null;
 
@@ -233,11 +238,15 @@ public class Downloader : IDisposable
                         await AwaitAndProcessTask(tasks, cts);
                     }
 
+                    var active_chunks = chunks.Where(m => m.IsActive).Count();
+                    _bandwidth.SetBandwidthLimit(_settings.MaximumBytesPerSecond / Math.Max(Math.Min(_settings.Parallel, active_chunks), 1));
                     tasks.Add(Download(i, chunk, cts.Token));
                 }
 
                 while (tasks.Count > 0)
                 {
+                    var active_chunks = chunks.Where(m => m.IsActive).Count();
+                    _bandwidth.SetBandwidthLimit(_settings.MaximumBytesPerSecond / Math.Max(Math.Min(_settings.Parallel, active_chunks), 1));
                     await AwaitAndProcessTask(tasks, cts);
                 }
 
@@ -287,6 +296,8 @@ public class Downloader : IDisposable
 
             while (!completed)
             {
+                // var active_chunks = chunks.Where(m => m.IsActive).Count();
+                // _bandwidth.SetBandwidthLimit(_settings.MaximumBytesPerSecond / Math.Max(Math.Min(_settings.Parallel, active_chunks), 1));
                 OnProgress?.Invoke(chunks, _fileBuffer.Count);
 
                 // ReSharper disable once MethodSupportsCancellation
@@ -427,7 +438,7 @@ public class Downloader : IDisposable
                 var cancellationCompletionSource = new TaskCompletionSource<Boolean>();
                 cancellationToken.Register(() => cancellationCompletionSource.TrySetResult(true));
 
-                var bandwidth = new Bandwidth(_settings.MaximumBytesPerSecond / _settings.Parallel);
+                // var _bandwidth = new Bandwidth(_settings.MaximumBytesPerSecond / _settings.Parallel);
 
                 var totalBytesRead = 0L;
 
@@ -485,17 +496,17 @@ public class Downloader : IDisposable
                     // Update statistics and calcuate current speed.
                     totalBytesRead += bytesRead;
 
-                    bandwidth.CalculateSpeed(bytesRead);
+                    _bandwidth.CalculateSpeed(bytesRead);
 
-                    var delayTime = bandwidth.PopSpeedRetrieveTime();
+                    var delayTime = _bandwidth.PopSpeedRetrieveTime();
 
                     if (delayTime > 0)
                     {
                         // ReSharper disable once MethodSupportsCancellation
                         await Task.Delay(delayTime);
                     }
-                    
-                    chunk.Speed = bandwidth.Speed;
+
+                    chunk.Speed = _bandwidth.Speed;
                     chunk.DownloadBytes = totalBytesRead;
 
                     if (chunk.LengthBytes > 0)

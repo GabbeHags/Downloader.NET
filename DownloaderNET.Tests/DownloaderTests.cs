@@ -1,7 +1,13 @@
+using Xunit.Abstractions;
+
 namespace DownloaderNET.Tests;
 
 public class DownloaderTests : BaseTest
 {
+    public DownloaderTests(ITestOutputHelper output) : base(output)
+    {
+    }
+
     [Fact]
     public async Task SingleChunk()
     {
@@ -11,7 +17,7 @@ public class DownloaderTests : BaseTest
         });
         Assert.Equal(GetHash("test.bin"), sha);
     }
-    
+
     [Theory]
     [InlineData(2)]
     [InlineData(3)]
@@ -25,6 +31,23 @@ public class DownloaderTests : BaseTest
         var sha = await Download(new Options
         {
             Parallel = parallel
+        });
+        Assert.Equal(GetHash("test.bin"), sha);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(5)]
+    [InlineData(10)]
+    public async Task MultipleLargeChunks(Int32 parallel)
+    {
+        var sha = await Download(new Options
+        {
+            Parallel = parallel,
+            ServerSize = 2000_000,
+            ChunkSize = 500_000,
+            MaximumBytesPerSecond = 1024*1024*5
         });
         Assert.Equal(GetHash("test.bin"), sha);
     }
@@ -67,7 +90,7 @@ public class DownloaderTests : BaseTest
             ServerFailAfterBytes = 328893
         }));
     }
-    
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
@@ -107,7 +130,7 @@ public class DownloaderTests : BaseTest
             ServerRequestTimeout = 31000
         }));
     }
-    
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
